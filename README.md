@@ -58,4 +58,4 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ stre
 
 ## Type docs
 
-![Type docs](./docs/)
+[Type docs](./docs/)
