@@ -1,6 +1,6 @@
 {
   "name": "@s2-dev/resumable-stream",
-  "version": "1.3.0",
+  "version": "1.5.0",
   "description": "Resumable streams based on s2.dev, inspired by Vercel's implementation.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

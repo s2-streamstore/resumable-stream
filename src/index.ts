@@ -73,6 +73,7 @@ export function createResumableStreamContext(
     waitUntil: options.waitUntil,
   } as CreateResumableStreamContext;
 
+  getS2Config();
   return {
     resumableStream: async (streamId: string, inputStream: ReadableStream<string>) => {
       return await createResumableStream(ctx, inputStream, streamId);
