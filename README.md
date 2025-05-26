@@ -9,11 +9,7 @@ To use this package, you need to:
 
 1) Create an [Access token](https://s2.dev/docs/access-control) for S2 and a `Basin` to store all your streams. You can do so by signing up [here](https://s2.dev/dashboard). Set the created token as `S2_ACCESS_TOKEN` in your env.
 
-![](./assets/access-token.png)
-
-2) Create a new basin from the basins tab with appropriate retention age and set it as `S2_BASIN` in your env.
-
-![](./assets/basins.png)
+2) Create a new basin from the basins tab with appropriate `retention age` for streams and the `create-on-append` option turned on, and set it as `S2_BASIN` in your env.
 
 The incoming stream is batched and the batch size can be changed by setting `S2_BATCH_SIZE`.
 
