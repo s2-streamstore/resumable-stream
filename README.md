@@ -4,12 +4,11 @@ This package is inspired by Vercel's take on [Resumable Streams](https://github.
 
 ## Usage
 
-To use this package, you need to:
+To use this package, you need to create an S2 [access token](https://s2.dev/docs/access-control) and basin to store all your streams.
 
+1. Sign up [here](https://s2.dev/dashboard), generate an access token and set it as `S2_ACCESS_TOKEN` in your env.
 
-1) Create an [Access token](https://s2.dev/docs/access-control) for S2 and a `Basin` to store all your streams. You can do so by signing up [here](https://s2.dev/dashboard). Set the created token as `S2_ACCESS_TOKEN` in your env.
-
-2) Create a new basin from the basins tab with appropriate `retention age` for streams and the `create-on-append` option turned on, and set it as `S2_BASIN` in your env.
+2. Create a new basin from the `Basins` tab with the `Create Stream on Append` option enabled, and set it as `S2_BASIN` in your env.
 
 The incoming stream is batched and the batch size can be changed by setting `S2_BATCH_SIZE`.
 
