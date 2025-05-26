@@ -16,6 +16,8 @@ Create a new basin from the basins tab with appropriate retention age and set it
 
 The incoming stream is batched and the batch size can be changed by setting `S2_BATCH_SIZE`.
 
+To integrate this package with the Chat SDK, checkout the following changes [here](https://github.com/s2-streamstore/ai-chatbot/blob/s2-streams/app/(chat)/api/chat/route.ts).
+
 ```ts
 import { createResumableStreamContext } from "resumable-stream";
 import { after } from "next/server";
