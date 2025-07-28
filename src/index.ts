@@ -172,8 +172,7 @@ async function appendRecords(
     s2Basin: basin,
     stream: streamId,
     appendInput: {
-      records: batch.map((body) => ({ body })),
-      fencingToken: "",
+      records: batch.map((body) => ({ body })),      
       matchSeqNum: isFirstBatch ? 0 : undefined,
     },
   });
