@@ -11,7 +11,8 @@
     "clean": "rimraf dist",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
     "build": "tsc -p tsconfig.json",
-    "docs": "rimraf docs && pnpm typedoc"
+    "docs": "rimraf docs && pnpm typedoc",
+    "test": "jest"
   },
   "repository": {
     "type": "git",
@@ -24,9 +25,13 @@
   },
   "homepage": "https://github.com/s2-streamstore/resumable-stream#readme",
   "devDependencies": {
+    "@types/jest": "^30.0.0",
     "@types/node": "^22.15.21",
+    "jest": "^30.0.5",
     "prettier": "^3.5.3",
+    "ts-jest": "^29.4.0",
     "ts-node": "^10.9.2",
+    "tsx": "^4.20.3",
     "typedoc": "^0.28.3",
     "typedoc-plugin-markdown": "^4.6.2",
     "typescript": "^5.8.3"
