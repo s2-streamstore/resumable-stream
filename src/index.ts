@@ -55,6 +55,10 @@ export interface ResumableStreamContext {
   resumeStream: (streamId: string) => ReadableStream<string | null>;
 }
 
+function generateFencingToken(): string {
+  return Math.random().toString(36).slice(2, 7);
+}
+
 function getS2Config(): S2Config {
   const accessToken = process.env.S2_ACCESS_TOKEN;
   const basin = process.env.S2_BASIN;
@@ -92,6 +96,7 @@ export async function createResumableStream(
   const { accessToken, basin, batchSize } = getS2Config();
   const s2 = new S2({ accessToken });
   const [persistentStream, clientStream] = stream.tee();
+  const sessionFencingToken = "session-" + generateFencingToken();
 
   const processPersistentStream = async () => {
     const reader = persistentStream.getReader();
@@ -105,16 +110,16 @@ export async function createResumableStream(
         const { done, value } = await reader.read();
         if (done) {
           if (batchState.records.length > 0) {
-            await appendRecords(s2, basin, streamId, batchState.records, batchState.isFirstBatch);
+            await appendRecords(s2, basin, streamId, batchState.records, sessionFencingToken, batchState.isFirstBatch);
           }
-          await appendFenceCommand(s2, basin, streamId);
+          await appendFenceCommand(s2, basin, streamId, sessionFencingToken, "end-" + generateFencingToken());
           break;
         }
 
         batchState.records.push(value);
 
         if (batchState.records.length >= batchSize) {
-          await appendRecords(s2, basin, streamId, batchState.records, batchState.isFirstBatch);
+          await appendRecords(s2, basin, streamId, batchState.records, sessionFencingToken, batchState.isFirstBatch);
           batchState.isFirstBatch = false;
           batchState.records = [];
         }
@@ -122,7 +127,7 @@ export async function createResumableStream(
     } catch (error) {
       debugLog("Error processing stream:", error);
       try {
-        await appendFenceCommand(s2, basin, streamId);
+        await appendFenceCommand(s2, basin, streamId, sessionFencingToken, "error-" + generateFencingToken());
       } catch (fenceError) {
         debugLog("Error appending fence command:", fenceError);
       }
@@ -166,27 +171,32 @@ async function appendRecords(
   basin: string,
   streamId: string,
   batch: string[],
+  fencingToken: string,
   isFirstBatch?: boolean
 ): Promise<void> {
+  if (isFirstBatch === true) {
+    await appendFenceCommand(s2, basin, streamId, "", fencingToken);
+  }
   await s2.records.append({
     s2Basin: basin,
     stream: streamId,
     appendInput: {
-      records: batch.map((body) => ({ body })),      
-      matchSeqNum: isFirstBatch ? 0 : undefined,
+      records: batch.map((body) => ({ body })),
+      fencingToken,
+      matchSeqNum: isFirstBatch ? 1 : undefined,
     },
   });
 }
 
-async function appendFenceCommand(s2: S2, basin: string, streamId: string): Promise<void> {
-  const fencingToken = Math.random().toString(36).slice(2, 7);
+async function appendFenceCommand(s2: S2, basin: string, streamId: string, prevFencingToken: string, newFencingToken: string): Promise<void> {
   await s2.records.append({
     s2Basin: basin,
     stream: streamId,
     appendInput: {
+      fencingToken: prevFencingToken,
       records: [
         {
-          body: fencingToken,
+          body: newFencingToken,
           headers: [["", "fence"]],
         },
       ],
@@ -203,8 +213,11 @@ async function processStream(
     const batch = record.data as ReadBatch;
     for (const rec of batch.records) {
       if (isFenceCommand(rec)) {
-        controller.close();
-        return;
+        if (rec.body?.startsWith("end")) {
+          controller.close();
+          return;
+        }
+        continue;
       }
       if (rec.body) {
         controller.enqueue(rec.body);
