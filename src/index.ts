@@ -3,6 +3,118 @@ import { ReadAcceptEnum } from '@s2-dev/streamstore/sdk/records.js';
 import { EventStream } from '@s2-dev/streamstore/lib/event-streams.js';
 import { ReadBatch, ReadEvent, SequencedRecord } from '@s2-dev/streamstore/models/components';
 
+export interface AppendOpts {
+  maxBatchRecords?: number;
+  matchSeqNum?: number
+  fencingToken?: string;
+  lingerDuration?: number;
+}
+
+export interface AppendRecord {
+  body: string;
+  headers?: [string, string][];
+}
+
+export interface AppendRecordBatch {
+  records: AppendRecord[];
+  max_capacity: number;
+}
+
+export interface AppendInput {
+  records: AppendRecordBatch;
+  matchSeqNum?: number;
+  fencingToken?: string;
+}
+
+const defaultAppendOpts: AppendOpts = {
+  maxBatchRecords: 1000,
+  matchSeqNum: undefined,
+  fencingToken: undefined,
+  lingerDuration: 5,
+};
+
+export function createAppendOpts(overrides: AppendOpts = {}): AppendOpts {
+  const opts = { ...defaultAppendOpts, ...overrides };
+
+  if (opts.maxBatchRecords !== undefined && (opts.maxBatchRecords <= 0 || opts.maxBatchRecords > 1000)) {
+    throw new Error("Batch capacity must be between 1 and 1000");
+  }
+
+  return opts;
+}
+
+export class BatchBuilder {
+  private peekedRecord: AppendRecord | null = null;
+  private nextMatchSeqNum: number | undefined;
+  private batch: AppendRecordBatch;
+
+  constructor(private opts: AppendOpts = {}) {
+    this.opts = createAppendOpts(opts);
+    this.batch = {
+      records: [],
+      max_capacity: this.opts.maxBatchRecords || 1000,
+    };
+  }
+
+  addRecord(body: string, headers?: [string, string][]): boolean {
+    const record: AppendRecord = { body, headers };
+
+    if (this.batch.records.length >= this.batch.max_capacity) {
+      this.peekedRecord = record;
+      return false;
+    }
+
+    this.batch.records.push(record);
+    return true;
+  }
+
+  isFull(): boolean {
+    return this.batch.records.length >= this.batch.max_capacity;
+  }
+
+  hasRecords(): boolean {
+    return this.batch.records.length > 0;
+  }
+
+  setMatchSeqNum(seqNum: number): void {
+    this.nextMatchSeqNum = seqNum;
+  }
+
+  flush(): AppendInput | null {
+    if (this.batch.records.length === 0) return null;
+
+    const matchSeqNum = this.nextMatchSeqNum;
+
+    if (this.nextMatchSeqNum !== undefined) {
+      this.nextMatchSeqNum += this.batch.records.length;
+    }
+
+    const flushedBatch = this.batch;
+    this.batch = {
+      records: [],
+      max_capacity: this.opts.maxBatchRecords || 1000,
+    };
+
+    const result: AppendInput = {
+      records: flushedBatch,
+      matchSeqNum,
+      fencingToken: this.opts.fencingToken,
+    };
+
+    const leftover = this.peekedRecord;
+    this.peekedRecord = null;
+
+    if (leftover) {
+      this.batch.records.push(leftover);
+    }
+
+    console.assert(this.peekedRecord === null, 'Record did not fit after flush');
+
+    return result;
+  }
+}
+
+
 interface S2Config {
   /**
    * Access token for S2.  
@@ -20,7 +132,7 @@ interface S2Config {
 }
 
 interface BatchState {
-  records: string[];
+  batchBuilder: BatchBuilder;
   isFirstBatch: boolean;
 }
 
@@ -101,27 +213,45 @@ export async function createResumableStream(
   const processPersistentStream = async () => {
     const reader = persistentStream.getReader();
     const batchState: BatchState = {
-      records: [],
+      batchBuilder: new BatchBuilder({
+        maxBatchRecords: batchSize,
+        fencingToken: sessionFencingToken
+      }),
       isFirstBatch: true,
     };
+
+    if (batchState.isFirstBatch) {
+      batchState.batchBuilder.setMatchSeqNum(1);
+    }
 
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
-          if (batchState.records.length > 0) {
-            await appendRecords(s2, basin, streamId, batchState.records, sessionFencingToken, batchState.isFirstBatch);
+          if (batchState.batchBuilder.hasRecords()) {
+            const appendInput = batchState.batchBuilder.flush();
+            if (appendInput) {
+              await appendRecords(s2, basin, streamId, appendInput, batchState.isFirstBatch);
+            }
           }
           await appendFenceCommand(s2, basin, streamId, sessionFencingToken, "end-" + generateFencingToken());
           break;
         }
 
-        batchState.records.push(value);
+        if (!batchState.batchBuilder.addRecord(value)) {
+          const appendInput = batchState.batchBuilder.flush();
+          if (appendInput) {
+            await appendRecords(s2, basin, streamId, appendInput, batchState.isFirstBatch);
+            batchState.isFirstBatch = false;
+          }
+        }
 
-        if (batchState.records.length >= batchSize) {
-          await appendRecords(s2, basin, streamId, batchState.records, sessionFencingToken, batchState.isFirstBatch);
-          batchState.isFirstBatch = false;
-          batchState.records = [];
+        if (batchState.batchBuilder.isFull()) {
+          const appendInput = batchState.batchBuilder.flush();
+          if (appendInput) {
+            await appendRecords(s2, basin, streamId, appendInput, batchState.isFirstBatch);
+            batchState.isFirstBatch = false;
+          }
         }
       }
     } catch (error) {
@@ -170,22 +300,29 @@ async function appendRecords(
   s2: S2,
   basin: string,
   streamId: string,
-  batch: string[],
-  fencingToken: string,
+  appendInput: AppendInput,
   isFirstBatch?: boolean
 ): Promise<void> {
   if (isFirstBatch === true) {
-    await appendFenceCommand(s2, basin, streamId, "", fencingToken);
+    await appendFenceCommand(s2, basin, streamId, "", appendInput.fencingToken || "");
   }
-  await s2.records.append({
-    s2Basin: basin,
-    stream: streamId,
-    appendInput: {
-      records: batch.map((body) => ({ body })),
-      fencingToken,
-      matchSeqNum: isFirstBatch ? 1 : undefined,
-    },
-  });
+  try {
+    await s2.records.append({
+      s2Basin: basin,
+      stream: streamId,
+      appendInput: {
+        records: appendInput.records.records,
+        fencingToken: appendInput.fencingToken,
+        matchSeqNum: appendInput.matchSeqNum,
+      },
+    });
+  } catch (error: any) {
+    if (error.message.includes("seqNumMismatch")) {
+      debugLog("matchseqNum mismatch, moving to next batch");
+      return;
+    }
+    throw error;
+  }
 }
 
 async function appendFenceCommand(s2: S2, basin: string, streamId: string, prevFencingToken: string, newFencingToken: string): Promise<void> {
