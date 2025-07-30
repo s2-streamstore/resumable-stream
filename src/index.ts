@@ -2,118 +2,7 @@ import { S2 } from "@s2-dev/streamstore";
 import { ReadAcceptEnum } from '@s2-dev/streamstore/sdk/records.js';
 import { EventStream } from '@s2-dev/streamstore/lib/event-streams.js';
 import { ReadBatch, ReadEvent, SequencedRecord } from '@s2-dev/streamstore/models/components';
-
-export interface AppendOpts {
-  maxBatchRecords?: number;
-  matchSeqNum?: number
-  fencingToken?: string;
-  lingerDuration?: number;
-}
-
-export interface AppendRecord {
-  body: string;
-  headers?: [string, string][];
-}
-
-export interface AppendRecordBatch {
-  records: AppendRecord[];
-  max_capacity: number;
-}
-
-export interface AppendInput {
-  records: AppendRecordBatch;
-  matchSeqNum?: number;
-  fencingToken?: string;
-}
-
-const defaultAppendOpts: AppendOpts = {
-  maxBatchRecords: 1000,
-  matchSeqNum: undefined,
-  fencingToken: undefined,
-  lingerDuration: 5,
-};
-
-export function createAppendOpts(overrides: AppendOpts = {}): AppendOpts {
-  const opts = { ...defaultAppendOpts, ...overrides };
-
-  if (opts.maxBatchRecords !== undefined && (opts.maxBatchRecords <= 0 || opts.maxBatchRecords > 1000)) {
-    throw new Error("Batch capacity must be between 1 and 1000");
-  }
-
-  return opts;
-}
-
-export class BatchBuilder {
-  private peekedRecord: AppendRecord | null = null;
-  private nextMatchSeqNum: number | undefined;
-  private batch: AppendRecordBatch;
-
-  constructor(private opts: AppendOpts = {}) {
-    this.opts = createAppendOpts(opts);
-    this.batch = {
-      records: [],
-      max_capacity: this.opts.maxBatchRecords || 1000,
-    };
-  }
-
-  addRecord(body: string, headers?: [string, string][]): boolean {
-    const record: AppendRecord = { body, headers };
-
-    if (this.batch.records.length >= this.batch.max_capacity) {
-      this.peekedRecord = record;
-      return false;
-    }
-
-    this.batch.records.push(record);
-    return true;
-  }
-
-  isFull(): boolean {
-    return this.batch.records.length >= this.batch.max_capacity;
-  }
-
-  hasRecords(): boolean {
-    return this.batch.records.length > 0;
-  }
-
-  setMatchSeqNum(seqNum: number): void {
-    this.nextMatchSeqNum = seqNum;
-  }
-
-  flush(): AppendInput | null {
-    if (this.batch.records.length === 0) return null;
-
-    const matchSeqNum = this.nextMatchSeqNum;
-
-    if (this.nextMatchSeqNum !== undefined) {
-      this.nextMatchSeqNum += this.batch.records.length;
-    }
-
-    const flushedBatch = this.batch;
-    this.batch = {
-      records: [],
-      max_capacity: this.opts.maxBatchRecords || 1000,
-    };
-
-    const result: AppendInput = {
-      records: flushedBatch,
-      matchSeqNum,
-      fencingToken: this.opts.fencingToken,
-    };
-
-    const leftover = this.peekedRecord;
-    this.peekedRecord = null;
-
-    if (leftover) {
-      this.batch.records.push(leftover);
-    }
-
-    console.assert(this.peekedRecord === null, 'Record did not fit after flush');
-
-    return result;
-  }
-}
-
+import { AppendInput, BatchBuilder } from './batching.js';
 
 interface S2Config {
   /**
@@ -129,6 +18,11 @@ interface S2Config {
    * Defaults to 10 if not set.
   */
   readonly batchSize: number;
+  /**
+   * Maximum time to wait before flushing a batch (in milliseconds).
+   * Defaults to 5000 if not set.
+   */
+  readonly lingerDuration: number;
 }
 
 interface BatchState {
@@ -175,11 +69,12 @@ function getS2Config(): S2Config {
   const accessToken = process.env.S2_ACCESS_TOKEN;
   const basin = process.env.S2_BASIN;
   const batchSize = parseInt(process.env.S2_BATCH_SIZE ?? "10", 10);
+  const lingerDuration = parseInt(process.env.S2_LINGER_DURATION ?? "5000", 10);
 
   if (!accessToken) throw new Error("S2_ACCESS_TOKEN is not set");
   if (!basin) throw new Error("S2_BASIN is not set");
 
-  return { accessToken, basin, batchSize };
+  return { accessToken, basin, batchSize, lingerDuration };
 }
 
 export function createResumableStreamContext(
@@ -205,7 +100,7 @@ export async function createResumableStream(
   stream: ReadableStream<string>,
   streamId: string
 ): Promise<ReadableStream<string>> {
-  const { accessToken, basin, batchSize } = getS2Config();
+  const { accessToken, basin, batchSize, lingerDuration } = getS2Config();
   const s2 = new S2({ accessToken });
   const [persistentStream, clientStream] = stream.tee();
   const sessionFencingToken = "session-" + generateFencingToken();
@@ -224,36 +119,63 @@ export async function createResumableStream(
       batchState.batchBuilder.setMatchSeqNum(1);
     }
 
+    let terminated = false;
+    let batchDeadline: Promise<void> | null = null;
+
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          if (batchState.batchBuilder.hasRecords()) {
-            const appendInput = batchState.batchBuilder.flush();
-            if (appendInput) {
-              await appendRecords(s2, basin, streamId, appendInput, batchState.isFirstBatch);
+      while (!terminated) {
+        while (!batchState.batchBuilder.isFull()) {
+          if (batchState.batchBuilder.hasRecords() && batchDeadline === null) {            
+            batchDeadline = new Promise(resolve => 
+              setTimeout(resolve, lingerDuration)
+            );
+          }
+
+          const readPromise = reader.read();
+          const promises: Promise<any>[] = [readPromise];
+          
+          if (batchDeadline && batchState.batchBuilder.hasRecords()) {
+            promises.push(batchDeadline);
+          }
+
+          const result = await Promise.race(promises);
+          
+          if (result === undefined && batchState.batchBuilder.hasRecords()) {           
+            batchDeadline = null;
+            break;
+          }
+          
+          if (result && typeof result === 'object' && 'done' in result) {
+            const { done, value } = result;
+            if (done) {
+              terminated = true;
+              break;
+            }
+
+            if (!batchState.batchBuilder.addRecord(value)) {              
+              break;
             }
           }
-          await appendFenceCommand(s2, basin, streamId, sessionFencingToken, "end-" + generateFencingToken());
-          break;
         }
 
-        if (!batchState.batchBuilder.addRecord(value)) {
+        if (batchState.batchBuilder.hasRecords()) {          
           const appendInput = batchState.batchBuilder.flush();
           if (appendInput) {
             await appendRecords(s2, basin, streamId, appendInput, batchState.isFirstBatch);
             batchState.isFirstBatch = false;
           }
-        }
-
-        if (batchState.batchBuilder.isFull()) {
-          const appendInput = batchState.batchBuilder.flush();
-          if (appendInput) {
-            await appendRecords(s2, basin, streamId, appendInput, batchState.isFirstBatch);
-            batchState.isFirstBatch = false;
-          }
+          batchDeadline = null;
         }
       }
+      
+      if (batchState.batchBuilder.hasRecords()) {
+        const appendInput = batchState.batchBuilder.flush();
+        if (appendInput) {
+          await appendRecords(s2, basin, streamId, appendInput, batchState.isFirstBatch);
+        }
+      }
+      
+      await appendFenceCommand(s2, basin, streamId, sessionFencingToken, "end-" + generateFencingToken());
     } catch (error) {
       debugLog("Error processing stream:", error);
       try {
