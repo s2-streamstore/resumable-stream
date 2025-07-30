@@ -43,7 +43,6 @@ async function readStreamToArray(
 }
 
 test('pub/sub', async () => {
-
     const context = createResumableStreamContext({
         waitUntil: async (promise) => {
             await promise;
@@ -98,4 +97,40 @@ test('concurrent creators result in a single stream with consistent ordered data
     const finalStreamData = await readStreamToArray(resumedStream, 20000);
 
     expect(finalStreamData).toEqual(initialMessages);
+});
+
+test('concurrent readers', async () => {
+    const context = createResumableStreamContext({
+        waitUntil: async (promise) => {
+            await promise;
+        }
+    });
+
+    const streamId = `concurrent-reader-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const messages = ['msg1', 'msg2', 'msg3', 'msg4'];
+
+    const inputStream = createStreamFromArray(messages);
+
+    await context.resumableStream(streamId, inputStream);
+
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    const resumedStream1 = context.resumeStream(streamId);
+    const resumedStream2 = context.resumeStream(streamId);
+    const resumedStream3 = context.resumeStream(streamId);
+
+    const results = await Promise.allSettled([
+        readStreamToArray(resumedStream1, 20000),
+        readStreamToArray(resumedStream2, 20000),
+        readStreamToArray(resumedStream3, 20000)
+    ]);
+
+    const successful = results.filter(result => result.status === 'fulfilled');
+    expect(successful.length).toBe(3);
+
+    const readerData = results.map(result => result.status === 'fulfilled' ? result.value : []);
+
+    expect(readerData[0]).toEqual(messages);
+    expect(readerData[1]).toEqual(messages);
+    expect(readerData[2]).toEqual(messages);
 });
