@@ -17,11 +17,17 @@ interface S2Config {
    * Defaults to 10 if not set.
   */
   readonly batchSize: number;
+  /**
+   * Maximum time in milliseconds to wait before flushing a batch.
+   * Defaults to 1000ms if not set.
+   */
+  readonly lingerTimeMs: number;
 }
 
 interface BatchState {
   records: string[];
   isFirstBatch: boolean;
+  lingerTimer?: NodeJS.Timeout;
 }
 
 export interface CreateResumableStreamContextOptions {
@@ -63,11 +69,12 @@ function getS2Config(): S2Config {
   const accessToken = process.env.S2_ACCESS_TOKEN;
   const basin = process.env.S2_BASIN;
   const batchSize = parseInt(process.env.S2_BATCH_SIZE ?? "10", 10);
+  const lingerTimeMs = parseInt(process.env.S2_LINGER_TIME_MS ?? "100", 10);
 
   if (!accessToken) throw new Error("S2_ACCESS_TOKEN is not set");
   if (!basin) throw new Error("S2_BASIN is not set");
 
-  return { accessToken, basin, batchSize };
+  return { accessToken, basin, batchSize, lingerTimeMs };
 }
 
 export function createResumableStreamContext(
@@ -93,7 +100,7 @@ export async function createResumableStream(
   stream: ReadableStream<string>,
   streamId: string
 ): Promise<ReadableStream<string>> {
-  const { accessToken, basin, batchSize } = getS2Config();
+  const { accessToken, basin, batchSize, lingerTimeMs } = getS2Config();
   const s2 = new S2({ accessToken });
   const [persistentStream, clientStream] = stream.tee();
   const sessionFencingToken = "session-" + generateFencingToken();
@@ -105,10 +112,38 @@ export async function createResumableStream(
       isFirstBatch: true,
     };
 
+    const flushBatch = async () => {
+      if (batchState.records.length > 0) {
+        await appendRecords(s2, basin, streamId, batchState.records, sessionFencingToken, batchState.isFirstBatch);
+        batchState.isFirstBatch = false;
+        batchState.records = [];
+      }
+      if (batchState.lingerTimer) {
+        clearTimeout(batchState.lingerTimer);
+        batchState.lingerTimer = undefined;
+      }
+    };
+
+    const startLingerTimer = () => {
+      if (batchState.lingerTimer) {
+        clearTimeout(batchState.lingerTimer);
+      }
+      batchState.lingerTimer = setTimeout(async () => {
+        try {
+          await flushBatch();
+        } catch (error) {
+          debugLog("Error flushing batch on linger timeout:", error);
+        }
+      }, lingerTimeMs);
+    };
+
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
+          if (batchState.lingerTimer) {
+            clearTimeout(batchState.lingerTimer);
+          }
           if (batchState.records.length > 0) {
             await appendRecords(s2, basin, streamId, batchState.records, sessionFencingToken, batchState.isFirstBatch);
           }
@@ -117,15 +152,20 @@ export async function createResumableStream(
         }
 
         batchState.records.push(value);
+        
+        if (batchState.records.length === 1) {
+          startLingerTimer();
+        }
 
         if (batchState.records.length >= batchSize) {
-          await appendRecords(s2, basin, streamId, batchState.records, sessionFencingToken, batchState.isFirstBatch);
-          batchState.isFirstBatch = false;
-          batchState.records = [];
+          await flushBatch();
         }
       }
     } catch (error) {
       debugLog("Error processing stream:", error);
+      if (batchState.lingerTimer) {
+        clearTimeout(batchState.lingerTimer);
+      }
       try {
         await appendFenceCommand(s2, basin, streamId, sessionFencingToken, "error-" + generateFencingToken());
       } catch (fenceError) {
