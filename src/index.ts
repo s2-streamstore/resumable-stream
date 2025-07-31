@@ -282,13 +282,13 @@ async function appendFenceCommand(
 
 async function processStream(
   streamID: string,
-  recordsStream: EventStream<ReadEvent>,
+  eventStream: EventStream<ReadEvent>,
   controller: ReadableStreamDefaultController<string>
 ): Promise<void> {
-  for await (const record of recordsStream) {
-    if (record.event !== "batch") continue;
+  for await (const readEvent of eventStream) {
+    if (readEvent.event !== "batch") continue;
 
-    const batch = record.data as ReadBatch;
+    const batch = readEvent.data as ReadBatch;
     for (const rec of batch.records) {
       if (isFenceCommand(rec)) {
         if (rec.body?.startsWith("end")) {
