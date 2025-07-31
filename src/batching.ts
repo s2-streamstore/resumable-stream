@@ -1,7 +1,7 @@
 export interface AppendOpts {
   maxBatchRecords?: number;
-  matchSeqNum?: number
-  fencingToken?: string;  
+  matchSeqNum?: number;
+  fencingToken?: string;
 }
 
 export interface AppendRecord {
@@ -20,17 +20,25 @@ export interface AppendInput {
   fencingToken?: string;
 }
 
+const MAX_BATCH_CAPACITY = 1000;
+const MIN_BATCH_CAPACITY = 1;
+
 const defaultAppendOpts: AppendOpts = {
-  maxBatchRecords: 1000,
+  maxBatchRecords: MAX_BATCH_CAPACITY,
   matchSeqNum: undefined,
-  fencingToken: undefined,  
+  fencingToken: undefined,
 };
 
 export function createAppendOpts(overrides: AppendOpts = {}): AppendOpts {
   const opts = { ...defaultAppendOpts, ...overrides };
 
-  if (opts.maxBatchRecords !== undefined && (opts.maxBatchRecords <= 0 || opts.maxBatchRecords > 1000)) {
-    throw new Error("Batch capacity must be between 1 and 1000");
+  if (
+    opts.maxBatchRecords !== undefined &&
+    (opts.maxBatchRecords < MIN_BATCH_CAPACITY || opts.maxBatchRecords > MAX_BATCH_CAPACITY)
+  ) {
+    throw new Error(
+      `Batch capacity must be between ${MIN_BATCH_CAPACITY} and ${MAX_BATCH_CAPACITY}`
+    );
   }
 
   return opts;
@@ -45,7 +53,7 @@ export class BatchBuilder {
     this.opts = createAppendOpts(opts);
     this.batch = {
       records: [],
-      max_capacity: this.opts.maxBatchRecords || 1000,
+      max_capacity: this.opts.maxBatchRecords || MAX_BATCH_CAPACITY,
     };
   }
 
@@ -73,7 +81,7 @@ export class BatchBuilder {
     return this.batch.records.length === 0;
   }
 
-  len(): number {
+  get length(): number {
     return this.batch.records.length;
   }
 
@@ -82,7 +90,9 @@ export class BatchBuilder {
   }
 
   flush(): AppendInput | null {
-    if (this.batch.records.length === 0) return null;
+    if (this.isEmpty()) {
+      return null;
+    }
 
     const matchSeqNum = this.nextMatchSeqNum;
 
@@ -93,7 +103,7 @@ export class BatchBuilder {
     const flushedBatch = this.batch;
     this.batch = {
       records: [],
-      max_capacity: this.opts.maxBatchRecords || 1000,
+      max_capacity: this.opts.maxBatchRecords || MAX_BATCH_CAPACITY,
     };
 
     const result: AppendInput = {
@@ -102,14 +112,12 @@ export class BatchBuilder {
       fencingToken: this.opts.fencingToken,
     };
 
-    const leftover = this.peekedRecord;
-    this.peekedRecord = null;
-
-    if (leftover) {
-      this.batch.records.push(leftover);
+    if (this.peekedRecord) {
+      this.batch.records.push(this.peekedRecord);
+      this.peekedRecord = null;
     }
 
-    console.assert(this.peekedRecord === null, 'Record did not fit after flush');
+    console.assert(this.peekedRecord === null, "Record did not fit after flush");
 
     return result;
   }
