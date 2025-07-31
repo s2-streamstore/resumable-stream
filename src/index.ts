@@ -205,11 +205,11 @@ export async function createResumableStream(
 function resumeStream(streamId: string): ReadableStream<string | null> {
   const { accessToken, basin } = getS2Config();
   const s2 = new S2({ accessToken });
-  console.log("Resuming stream:", streamId);
+  debugLog("Resuming stream:", streamId);
   return new ReadableStream({
     async start(controller) {
       try {
-        const records = await s2.records.read(
+        const events = await s2.records.read(
           {
             s2Basin: basin,
             stream: streamId,
@@ -219,11 +219,8 @@ function resumeStream(streamId: string): ReadableStream<string | null> {
             acceptHeaderOverride: ReadAcceptEnum.textEventStream,
           }
         );
-        console.log("records:", records);
-        const recordsStream = records as EventStream<ReadEvent>;
-        console.log("recordsStream:", recordsStream);
-        await processStream(streamId, recordsStream, controller);
-        console.log("Stream processing completed for:", streamId);
+        const eventsStream = events as EventStream<ReadEvent>;
+        await processStream(streamId, eventsStream, controller);
       } catch (error) {
         debugLog("Error reading stream:", error);
         return null;
@@ -287,12 +284,12 @@ async function processStream(
   streamID: string,
   recordsStream: EventStream<ReadEvent>,
   controller: ReadableStreamDefaultController<string>
-): Promise<void> {  
-  for await (const record of recordsStream) {    
+): Promise<void> {
+  for await (const record of recordsStream) {
     if (record.event !== "batch") continue;
 
     const batch = record.data as ReadBatch;
-    for (const rec of batch.records) {      
+    for (const rec of batch.records) {
       if (isFenceCommand(rec)) {
         if (rec.body?.startsWith("end")) {
           debugLog("Closing stream due to fence(end) command:", streamID);
@@ -305,7 +302,7 @@ async function processStream(
         try {
           controller.enqueue(rec.body);
         } catch (error: any) {
-          if (error.code === 'ERR_INVALID_STATE') {
+          if (error.code === "ERR_INVALID_STATE") {
             debugLog("Likely page refresh caused stream closure:", streamID);
             return;
           }
