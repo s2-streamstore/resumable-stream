@@ -205,10 +205,11 @@ export async function createResumableStream(
 function resumeStream(streamId: string): ReadableStream<string | null> {
   const { accessToken, basin } = getS2Config();
   const s2 = new S2({ accessToken });
+  debugLog("Resuming stream:", streamId);
   return new ReadableStream({
     async start(controller) {
       try {
-        const records = await s2.records.read(
+        const events = await s2.records.read(
           {
             s2Basin: basin,
             stream: streamId,
@@ -218,8 +219,8 @@ function resumeStream(streamId: string): ReadableStream<string | null> {
             acceptHeaderOverride: ReadAcceptEnum.textEventStream,
           }
         );
-        const recordsStream = records as EventStream<ReadEvent>;
-        await processStream(recordsStream, controller);
+        const eventsStream = events as EventStream<ReadEvent>;
+        await processStream(streamId, eventsStream, controller);
       } catch (error) {
         debugLog("Error reading stream:", error);
         return null;
@@ -280,25 +281,37 @@ async function appendFenceCommand(
 }
 
 async function processStream(
-  recordsStream: EventStream<ReadEvent>,
+  streamID: string,
+  eventStream: EventStream<ReadEvent>,
   controller: ReadableStreamDefaultController<string>
 ): Promise<void> {
-  for await (const record of recordsStream) {
-    if (record.event !== "batch") continue;
-    const batch = record.data as ReadBatch;
+  for await (const readEvent of eventStream) {
+    if (readEvent.event !== "batch") continue;
+
+    const batch = readEvent.data as ReadBatch;
     for (const rec of batch.records) {
       if (isFenceCommand(rec)) {
         if (rec.body?.startsWith("end")) {
+          debugLog("Closing stream due to fence(end) command:", streamID);
           controller.close();
           return;
         }
         continue;
       }
       if (rec.body) {
-        controller.enqueue(rec.body);
+        try {
+          controller.enqueue(rec.body);
+        } catch (error: any) {
+          if (error.code === "ERR_INVALID_STATE") {
+            debugLog("Likely page refresh caused stream closure:", streamID);
+            return;
+          }
+          throw error;
+        }
       }
     }
   }
+  debugLog("Closing stream due to completion:", streamID);
   controller.close();
 }
 
