@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@s2-dev/streamstore':
-        specifier: ^0.13.3
-        version: 0.13.3(zod@3.25.28)
+        specifier: ^0.15.7
+        version: 0.15.7(zod@3.25.28)
       rimraf:
         specifier: ^6.0.1
         version: 6.0.1
@@ -510,12 +510,12 @@ packages:
     resolution: {integrity: sha512-QNqXyfVS2wm9hweSYD2O7F0G06uurj9kZ96TRQE5Y9hU7+tgdZwIkbAKc5Ocy1HxEY2kuDQa6cQ1WRs/O5LFKA==}
     engines: {node: ^12.20.0 || ^14.18.0 || >=16.0.0}
 
-  '@s2-dev/streamstore@0.13.3':
-    resolution: {integrity: sha512-4cb1u3znfPWP0AOKmQ8z9ZOziyeZUGacY7uZKc+ps9LsSx9cN11GeXGoaqRgXMSxEyp5Yy9q2Q0S7CmhIZIQ2A==}
+  '@s2-dev/streamstore@0.15.7':
+    resolution: {integrity: sha512-bE3zvwLI6YbXVO3upEHRNMiP3hBImLRkbG6oJF/RBG/gJ/yMbn1wmlMQAc7Pa8pp0JI1+3c/5eGGD1s332yhFA==}
     hasBin: true
     peerDependencies:
       '@modelcontextprotocol/sdk': '>=1.5.0 <1.10.0'
-      zod: '>= 3'
+      zod: ^3
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
         optional: true
@@ -2243,7 +2243,7 @@ snapshots:
 
   '@pkgr/core@0.2.9': {}
 
-  '@s2-dev/streamstore@0.13.3(zod@3.25.28)':
+  '@s2-dev/streamstore@0.15.7(zod@3.25.28)':
     dependencies:
       jsonpath-rfc9535: 1.1.0
       uuid: 9.0.1
