@@ -39,7 +39,7 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
-    "@s2-dev/streamstore": "^0.15.7",
+    "@s2-dev/streamstore": "^0.13.3",
     "rimraf": "^6.0.1"
   }
 }
