@@ -10,6 +10,8 @@
   "scripts": {
     "clean": "rimraf dist",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx}\"",
+    "lint": "tsc --noEmit",
     "build": "tsc -p tsconfig.json",
     "docs": "rimraf docs && pnpm typedoc",
     "test": "jest --forceExit"
