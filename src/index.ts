@@ -2,7 +2,7 @@ import { S2 } from "@s2-dev/streamstore";
 import { ReadAcceptEnum } from '@s2-dev/streamstore/sdk/records.js';
 import { EventStream } from '@s2-dev/streamstore/lib/event-streams.js';
 import { ReadBatch, ReadEvent, SequencedRecord } from '@s2-dev/streamstore/models/components';
-import { AppendInput, BatchBuilder } from './batching.js';
+import { AppendInput, BatchBuilder } from './batching';
 
 interface S2Config {
   /**

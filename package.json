@@ -12,7 +12,7 @@
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
     "build": "tsc -p tsconfig.json",
     "docs": "rimraf docs && pnpm typedoc",
-    "test": "jest"
+    "test": "jest --forceExit"
   },
   "repository": {
     "type": "git",
