@@ -22,6 +22,9 @@
 
 This package is inspired by Vercel's take on [Resumable Streams](https://github.com/vercel/resumable-stream) used in the Chat SDK, except instead of Redis, this relies on [S2](http://s2.dev/) to create and resume streams.
 
+
+![Demo](./assets/demo.gif)
+
 ## Usage
 
 To use this package, you need to create an S2 [access token](https://s2.dev/docs/access-control) and basin to store all your streams.
