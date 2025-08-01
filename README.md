@@ -1,6 +1,26 @@
-## Resumable stream
+<div align="center">
+  <p>
+    <!-- Light mode logo -->
+    <a href="https://s2.dev#gh-light-mode-only">
+      <img src="./assets/s2-black.png" height="60">
+    </a>
+    <!-- Dark mode logo -->
+    <a href="https://s2.dev#gh-dark-mode-only">
+      <img src="./assets/s2-white.png" height="60">
+    </a>
+  </p>
 
-This package is inspired by Vercel's take on [Resumable Streams](https://github.com/vercel/resumable-stream) used in the Chat SDK, except instead of Redis, this relies on [S2](http://s2.dev/) providing a basic implementation to create and resume streams.
+  <h1>Resumable Streams<hi>
+
+  <p>    
+    <!-- Discord (chat) -->
+    <a href="https://discord.gg/vTCs7kMkAf"><img src="https://img.shields.io/discord/1209937852528599092?logo=discord" /></a>
+    <!-- LICENSE -->
+    <a href="./LICENSE"><img src="https://img.shields.io/github/license/s2-streamstore/resumable-stream" /></a>
+  </p>
+</div>
+
+This package is inspired by Vercel's take on [Resumable Streams](https://github.com/vercel/resumable-stream) used in the Chat SDK, except instead of Redis, this relies on [S2](http://s2.dev/) to create and resume streams.
 
 ## Usage
 
@@ -8,11 +28,11 @@ To use this package, you need to create an S2 [access token](https://s2.dev/docs
 
 1. Sign up [here](https://s2.dev/dashboard), generate an access token and set it as `S2_ACCESS_TOKEN` in your env.
 
-2. Create a new basin from the `Basins` tab with the `Create Stream on Append` option enabled, and set it as `S2_BASIN` in your env.
+2. Create a new basin from the `Basins` tab with the `Create Stream on Append` and `Create Stream on Read` option enabled, and set it as `S2_BASIN` in your env.
 
-The incoming stream is batched and the batch size can be changed by setting `S2_BATCH_SIZE`.
+The incoming stream is batched and the batch size can be changed by setting `S2_BATCH_SIZE`. The maximum time to wait before flushing a batch can be tweaked by setting `S2_LINGER_DURATION` to a duration in milliseconds.
 
-To integrate this package with the Chat SDK, checkout the following changes [here](https://github.com/s2-streamstore/ai-chatbot/blob/s2-streams/app/(chat)/api/chat/route.ts).
+To integrate this package with the Chat SDK, checkout the following changes [here](app/(chat)/api/chat/[id]/stream/route.ts).
 
 ```ts
 import { createResumableStreamContext } from "resumable-stream";
@@ -53,6 +73,20 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ stre
   });
 }
 ```
+
+## How it works
+
+### Creation
+1. The input stream is immediately duplicated using `tee()` into two identical streams.
+2. One stream is returned to the caller for immediate consumption and the other stream is processed asynchronously:
+   - An initial fence command is appended to S2 with a unique session token, claiming ownership of the stream to prevent any races. Streams are created on the first append (configured at the basin level).
+   - Data is continuously batched and flushed to S2 when the batch is full or a timeout occurs.
+   - When the stream completes, a final fence command marking the stream as done is appended.
+
+### Resumption
+1. A caller requests to resume an existing stream by ID.
+2. Creates an event stream to read all stored data from the beginning. If a read happens before any data was acknowledged by S2, due to Create Stream on Read being turned on, the stream would be created and would start tailing from `seqNum` 0.
+3. For each event, it is determined if it's actual data or a sentinel fence command, so it either outputs the chunk to the caller or closes the resumed stream normally.
 
 ## Type docs
 
