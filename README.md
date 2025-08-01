@@ -22,6 +22,7 @@
 
 This package is inspired by Vercel's take on [Resumable Streams](https://github.com/vercel/resumable-stream) used in the Chat SDK, except instead of Redis, this relies on [S2](http://s2.dev/) to create and resume streams.
 
+Try it out [here](https://ai-chatbot-s2.vercel.app/).
 
 ![Demo](./assets/demo.gif)
 
@@ -80,16 +81,18 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ stre
 ## How it works
 
 ### Creation
-1. The input stream is immediately duplicated using `tee()` into two identical streams.
+1. The input stream is immediately duplicated using into two identical streams.
 2. One stream is returned to the caller for immediate consumption and the other stream is processed asynchronously:
-   - An initial fence command is appended to S2 with a unique session token, claiming ownership of the stream to prevent any races. Streams are created on the first append (configured at the basin level).
-   - Data is continuously batched and flushed to S2 when the batch is full or a timeout occurs.
-   - When the stream completes, a final fence command marking the stream as done is appended.
+   - An initial fence command is appended to the S2 stream with a unique session token, claiming ownership of the stream to prevent any races. S2 streams are created on the first append (configured at the basin level).
+   - Data is continuously batched and flushed as it is read from the duplicated input stream to the S2 stream when the batch is full or a timeout occurs.
+   - When the input stream completes, a final fence command marking the stream as done is appended.
 
 ### Resumption
 1. A caller requests to resume an existing stream by ID.
-2. Creates an event stream to read all stored data from the beginning. If a read happens before any data was acknowledged by S2, due to Create Stream on Read being turned on, the stream would be created and would start tailing from `seqNum` 0.
-3. For each event, it is determined if it's actual data or a sentinel fence command, so it either outputs the chunk to the caller or closes the resumed stream normally.
+2. A stream is returned that reads data from the S2 stream and processes it:
+   - Data is read from the S2 stream from the beginning. S2 streams are also created on read (configured at the basin level) if a read happens before an append to prevent any races.
+   - Data records are enqueued to the output stream controller for consumption.
+   If a sentinel fence command is encountered, the stream is closed.
 
 ## Type docs
 
