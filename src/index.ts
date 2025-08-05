@@ -3,7 +3,7 @@ import { ReadAcceptEnum } from "@s2-dev/streamstore/sdk/records.js";
 import { EventStream } from "@s2-dev/streamstore/lib/event-streams.js";
 import { ReadBatch, ReadEvent, SequencedRecord } from "@s2-dev/streamstore/models/components";
 import { AppendInput, BatchBuilder } from "./batching";
-import { FencingToken, SeqNum } from "@s2-dev/streamstore/models/errors";
+import { FencingToken, SeqNum, TailResponse } from "@s2-dev/streamstore/models/errors";
 
 interface S2Config {
   /**
@@ -112,7 +112,7 @@ export async function createResumableStream(
     }),
   };
 
-  try {
+  try {    
     const lastRecord = (await s2.records.read({
       s2Basin: basin,
       stream: streamId,
@@ -125,13 +125,18 @@ export async function createResumableStream(
       return null;
     }
   } catch (error) {
-    debugLog("Error reading last record:", error);
+    if (error instanceof TailResponse) {
+      debugLog("Got TailResponse:", error);
+    } else {
+      debugLog("Error reading last record:", error);
+      return null;
+    }
   }
 
   try {
     await appendFenceCommand(s2, basin, streamId, "", sessionFencingToken);
   } catch (error: any) {
-    if (error instanceof FencingToken) {
+    if (error.message?.includes("fencingTokenMismatch")) {
       debugLog("Stream already exists, resuming existing stream:", streamId, error);
       return await resumeStream(streamId);
     }
@@ -270,7 +275,7 @@ async function appendRecords(
       },
     });
   } catch (error: any) {
-    if (error instanceof SeqNum) {
+    if (error.message?.includes("seqNumMismatch")) {
       debugLog("seqNum mismatch, skipping batch");
       return;
     }
