@@ -112,7 +112,7 @@ export async function createResumableStream(
     }),
   };
 
-  try {    
+  try {
     const lastRecord = (await s2.records.read({
       s2Basin: basin,
       stream: streamId,
@@ -124,7 +124,7 @@ export async function createResumableStream(
       debugLog("Stream already ended, not resuming:", streamId);
       return null;
     }
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof TailResponse) {
       debugLog("Got TailResponse:", error);
     } else {
@@ -136,7 +136,7 @@ export async function createResumableStream(
   try {
     await appendFenceCommand(s2, basin, streamId, "", sessionFencingToken);
   } catch (error: any) {
-    if (error.message?.includes("fencingTokenMismatch")) {
+    if (error instanceof FencingToken) {
       debugLog("Stream already exists, resuming existing stream:", streamId, error);
       return await resumeStream(streamId);
     }
@@ -275,7 +275,7 @@ async function appendRecords(
       },
     });
   } catch (error: any) {
-    if (error.message?.includes("seqNumMismatch")) {
+    if (error instanceof SeqNum) {
       debugLog("seqNum mismatch, skipping batch");
       return;
     }
