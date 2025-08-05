@@ -26,10 +26,6 @@ interface S2Config {
   readonly lingerDuration: number;
 }
 
-interface BatchState {
-  batchBuilder: BatchBuilder;
-}
-
 export interface CreateResumableStreamContextOptions {
   /**
    * A function that takes a promise and ensures that the current program stays alive until the promise is resolved.
@@ -105,12 +101,10 @@ export async function createResumableStream(
   const [persistentStream, clientStream] = stream.tee();
   const sessionFencingToken = "session-" + generateFencingToken();
 
-  const batchState: BatchState = {
-    batchBuilder: new BatchBuilder({
-      maxBatchRecords: batchSize,
-      fencingToken: sessionFencingToken,
-    }),
-  };
+  const batchBuilder = new BatchBuilder({
+    maxBatchRecords: batchSize,
+    fencingToken: sessionFencingToken,
+  });
 
   try {
     const lastRecord = (await s2.records.read({
@@ -147,28 +141,28 @@ export async function createResumableStream(
   const processPersistentStream = async () => {
     const reader = persistentStream.getReader();
 
-    batchState.batchBuilder.setMatchSeqNum(1);
+    batchBuilder.setMatchSeqNum(1);
 
     let terminated = false;
     let batchDeadline: Promise<void> | null = null;
 
     try {
       while (!terminated) {
-        while (!batchState.batchBuilder.isFull()) {
-          if (batchState.batchBuilder.hasRecords() && batchDeadline === null) {
+        while (!batchBuilder.isFull()) {
+          if (batchBuilder.hasRecords() && batchDeadline === null) {
             batchDeadline = new Promise((resolve) => setTimeout(resolve, lingerDuration));
           }
 
           const readPromise = reader.read();
           const promises: Promise<any>[] = [readPromise];
 
-          if (batchDeadline && batchState.batchBuilder.hasRecords()) {
+          if (batchDeadline && batchBuilder.hasRecords()) {
             promises.push(batchDeadline);
           }
 
           const result = await Promise.race(promises);
 
-          if (result === undefined && batchState.batchBuilder.hasRecords()) {
+          if (result === undefined && batchBuilder.hasRecords()) {
             batchDeadline = null;
             break;
           }
@@ -180,14 +174,14 @@ export async function createResumableStream(
               break;
             }
 
-            if (!batchState.batchBuilder.addRecord(value)) {
+            if (!batchBuilder.addRecord(value)) {
               break;
             }
           }
         }
 
-        if (batchState.batchBuilder.hasRecords()) {
-          const appendInput = batchState.batchBuilder.flush();
+        if (batchBuilder.hasRecords()) {
+          const appendInput = batchBuilder.flush();
           if (appendInput) {
             await appendRecords(s2, basin, streamId, appendInput);
           }
@@ -195,8 +189,8 @@ export async function createResumableStream(
         }
       }
 
-      if (batchState.batchBuilder.hasRecords()) {
-        const appendInput = batchState.batchBuilder.flush();
+      if (batchBuilder.hasRecords()) {
+        const appendInput = batchBuilder.flush();
         if (appendInput) {
           await appendRecords(s2, basin, streamId, appendInput);
         }
