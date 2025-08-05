@@ -118,7 +118,7 @@ export async function createResumableStream(
       tailOffset: 1,
       count: 1,
     })) as ReadBatch;
-    
+
     if (isStreamDone(lastRecord)) {
       debugLog("Stream already ended, not resuming:", streamId);
       return null;
@@ -256,8 +256,8 @@ async function appendRecords(
   s2: S2,
   basin: string,
   streamId: string,
-  appendInput: AppendInput  
-): Promise<void> {  
+  appendInput: AppendInput
+): Promise<void> {
   try {
     await s2.records.append({
       s2Basin: basin,
@@ -344,16 +344,18 @@ function isStreamDone(readBatch: ReadBatch): boolean {
   if (readBatch.records.length === 0) {
     return false;
   }
-  
+
   const lastRecord = readBatch.records[0];
   if (!isFenceCommand(lastRecord)) {
     return false;
   }
-  
+
   const fenceBody = lastRecord.body;
-  return fenceBody !== null && 
-         fenceBody !== undefined && 
-         (fenceBody.startsWith("end-") || fenceBody.startsWith("error-"));
+  return (
+    fenceBody !== null &&
+    fenceBody !== undefined &&
+    (fenceBody.startsWith("end-") || fenceBody.startsWith("error-"))
+  );
 }
 
 function debugLog(...messages: unknown[]) {
