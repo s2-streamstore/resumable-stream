@@ -119,12 +119,9 @@ export async function createResumableStream(
       count: 1,
     })) as ReadBatch;
     
-    if (lastRecord.records.length > 0 && lastRecord.records[0].headers?.[0][1] === "fence") {
-      const lastFence = lastRecord.records[0].body;
-      if (lastFence && (lastFence.startsWith("end-") || lastFence.startsWith("error-"))) {
-        debugLog("Stream already ended, not resuming:", streamId);
-        return null;
-      }
+    if (isStreamDone(lastRecord)) {
+      debugLog("Stream already ended, not resuming:", streamId);
+      return null;
     }
   } catch (error) {
     debugLog("Error reading last record:", error);
@@ -259,12 +256,8 @@ async function appendRecords(
   s2: S2,
   basin: string,
   streamId: string,
-  appendInput: AppendInput
-  // isFirstBatch?: boolean
-): Promise<void> {
-  // if (isFirstBatch === true) {
-  //   await appendFenceCommand(s2, basin, streamId, "", appendInput.fencingToken || "");
-  // }
+  appendInput: AppendInput  
+): Promise<void> {  
   try {
     await s2.records.append({
       s2Basin: basin,
@@ -345,6 +338,22 @@ function isFenceCommand(record: SequencedRecord): boolean {
   return (
     record.headers?.length === 1 && record.headers[0][0] === "" && record.headers[0][1] === "fence"
   );
+}
+
+function isStreamDone(readBatch: ReadBatch): boolean {
+  if (readBatch.records.length === 0) {
+    return false;
+  }
+  
+  const lastRecord = readBatch.records[0];
+  if (!isFenceCommand(lastRecord)) {
+    return false;
+  }
+  
+  const fenceBody = lastRecord.body;
+  return fenceBody !== null && 
+         fenceBody !== undefined && 
+         (fenceBody.startsWith("end-") || fenceBody.startsWith("error-"));
 }
 
 function debugLog(...messages: unknown[]) {
