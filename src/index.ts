@@ -111,21 +111,25 @@ export async function createResumableStream(
     }),
   };
 
-  const lastRecord = await s2.records.read(
-    {
-      s2Basin: basin,
-      stream: streamId,
-      tailOffset: 1,
-      count: 1,
-    },
-  ) as ReadBatch;
+  try {
+    const lastRecord = await s2.records.read(
+      {
+        s2Basin: basin,
+        stream: streamId,
+        tailOffset: 1,
+        count: 1,
+      },
+    ) as ReadBatch;
 
-  if (lastRecord.records.length > 0 && lastRecord.records[0].headers?.[0][1] === "fence") {
-    const lastFence = lastRecord.records[0].body;
-    if (lastFence && (lastFence.startsWith("end-") || lastFence.startsWith("error-"))) {
-      debugLog("Stream already ended, not resuming:", streamId);
-      return null;
+    if (lastRecord.records.length > 0 && lastRecord.records[0].headers?.[0][1] === "fence") {
+      const lastFence = lastRecord.records[0].body;
+      if (lastFence && (lastFence.startsWith("end-") || lastFence.startsWith("error-"))) {
+        debugLog("Stream already ended, not resuming:", streamId);
+        return null;
+      }
     }
+  } catch (error) {
+    debugLog("Error reading last record:", error);
   }
 
   try {
