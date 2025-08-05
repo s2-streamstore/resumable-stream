@@ -3,6 +3,7 @@ import { ReadAcceptEnum } from "@s2-dev/streamstore/sdk/records.js";
 import { EventStream } from "@s2-dev/streamstore/lib/event-streams.js";
 import { ReadBatch, ReadEvent, SequencedRecord } from "@s2-dev/streamstore/models/components";
 import { AppendInput, BatchBuilder } from "./batching";
+import { FencingToken, SeqNum, TailResponse } from "@s2-dev/streamstore/models/errors";
 
 interface S2Config {
   /**
@@ -23,11 +24,6 @@ interface S2Config {
    * Defaults to 5000 if not set.
    */
   readonly lingerDuration: number;
-}
-
-interface BatchState {
-  batchBuilder: BatchBuilder;
-  isFirstBatch: boolean;
 }
 
 export interface CreateResumableStreamContextOptions {
@@ -58,7 +54,7 @@ export interface ResumableStreamContext {
    * @param streamId - Unique identifier for the stream to resume.
    * @returns A ReadableStream that can be used to read.
    */
-  resumeStream: (streamId: string) => ReadableStream<string | null>;
+  resumeStream: (streamId: string) => Promise<ReadableStream<string> | null>;
 }
 
 function generateFencingToken(): string {
@@ -99,46 +95,74 @@ export async function createResumableStream(
   ctx: CreateResumableStreamContext,
   stream: ReadableStream<string>,
   streamId: string
-): Promise<ReadableStream<string>> {
+): Promise<ReadableStream<string> | null> {
   const { accessToken, basin, batchSize, lingerDuration } = getS2Config();
   const s2 = new S2({ accessToken });
   const [persistentStream, clientStream] = stream.tee();
   const sessionFencingToken = "session-" + generateFencingToken();
 
+  const batchBuilder = new BatchBuilder({
+    maxBatchRecords: batchSize,
+    fencingToken: sessionFencingToken,
+  });
+
+  try {
+    const lastRecord = (await s2.records.read({
+      s2Basin: basin,
+      stream: streamId,
+      tailOffset: 1,
+      count: 1,
+    })) as ReadBatch;
+
+    if (isStreamDone(lastRecord)) {
+      debugLog("Stream already ended, not resuming:", streamId);
+      return null;
+    }
+  } catch (error: any) {
+    if (error instanceof TailResponse) {
+      debugLog("Got TailResponse:", error);
+    } else {
+      debugLog("Error reading last record:", error);
+      return null;
+    }
+  }
+
+  try {
+    await appendFenceCommand(s2, basin, streamId, "", sessionFencingToken);
+  } catch (error: any) {
+    if (error instanceof FencingToken) {
+      debugLog("Stream already exists, resuming existing stream:", streamId, error);
+      return await resumeStream(streamId);
+    }
+    debugLog("Error initializing stream:", error);
+    return null;
+  }
+
   const processPersistentStream = async () => {
     const reader = persistentStream.getReader();
-    const batchState: BatchState = {
-      batchBuilder: new BatchBuilder({
-        maxBatchRecords: batchSize,
-        fencingToken: sessionFencingToken,
-      }),
-      isFirstBatch: true,
-    };
 
-    if (batchState.isFirstBatch) {
-      batchState.batchBuilder.setMatchSeqNum(1);
-    }
+    batchBuilder.setMatchSeqNum(1);
 
     let terminated = false;
     let batchDeadline: Promise<void> | null = null;
 
     try {
       while (!terminated) {
-        while (!batchState.batchBuilder.isFull()) {
-          if (batchState.batchBuilder.hasRecords() && batchDeadline === null) {
+        while (!batchBuilder.isFull()) {
+          if (batchBuilder.hasRecords() && batchDeadline === null) {
             batchDeadline = new Promise((resolve) => setTimeout(resolve, lingerDuration));
           }
 
           const readPromise = reader.read();
           const promises: Promise<any>[] = [readPromise];
 
-          if (batchDeadline && batchState.batchBuilder.hasRecords()) {
+          if (batchDeadline && batchBuilder.hasRecords()) {
             promises.push(batchDeadline);
           }
 
           const result = await Promise.race(promises);
 
-          if (result === undefined && batchState.batchBuilder.hasRecords()) {
+          if (result === undefined && batchBuilder.hasRecords()) {
             batchDeadline = null;
             break;
           }
@@ -150,26 +174,25 @@ export async function createResumableStream(
               break;
             }
 
-            if (!batchState.batchBuilder.addRecord(value)) {
+            if (!batchBuilder.addRecord(value)) {
               break;
             }
           }
         }
 
-        if (batchState.batchBuilder.hasRecords()) {
-          const appendInput = batchState.batchBuilder.flush();
+        if (batchBuilder.hasRecords()) {
+          const appendInput = batchBuilder.flush();
           if (appendInput) {
-            await appendRecords(s2, basin, streamId, appendInput, batchState.isFirstBatch);
-            batchState.isFirstBatch = false;
+            await appendRecords(s2, basin, streamId, appendInput);
           }
           batchDeadline = null;
         }
       }
 
-      if (batchState.batchBuilder.hasRecords()) {
-        const appendInput = batchState.batchBuilder.flush();
+      if (batchBuilder.hasRecords()) {
+        const appendInput = batchBuilder.flush();
         if (appendInput) {
-          await appendRecords(s2, basin, streamId, appendInput, batchState.isFirstBatch);
+          await appendRecords(s2, basin, streamId, appendInput);
         }
       }
 
@@ -202,7 +225,7 @@ export async function createResumableStream(
   return clientStream;
 }
 
-function resumeStream(streamId: string): ReadableStream<string | null> {
+async function resumeStream(streamId: string): Promise<ReadableStream<string> | null> {
   const { accessToken, basin } = getS2Config();
   const s2 = new S2({ accessToken });
   debugLog("Resuming stream:", streamId);
@@ -233,12 +256,8 @@ async function appendRecords(
   s2: S2,
   basin: string,
   streamId: string,
-  appendInput: AppendInput,
-  isFirstBatch?: boolean
+  appendInput: AppendInput
 ): Promise<void> {
-  if (isFirstBatch === true) {
-    await appendFenceCommand(s2, basin, streamId, "", appendInput.fencingToken || "");
-  }
   try {
     await s2.records.append({
       s2Basin: basin,
@@ -250,7 +269,7 @@ async function appendRecords(
       },
     });
   } catch (error: any) {
-    if (error.message.includes("seqNumMismatch")) {
+    if (error instanceof SeqNum) {
       debugLog("seqNum mismatch, skipping batch");
       return;
     }
@@ -318,6 +337,24 @@ async function processStream(
 function isFenceCommand(record: SequencedRecord): boolean {
   return (
     record.headers?.length === 1 && record.headers[0][0] === "" && record.headers[0][1] === "fence"
+  );
+}
+
+function isStreamDone(readBatch: ReadBatch): boolean {
+  if (readBatch.records.length === 0) {
+    return false;
+  }
+
+  const lastRecord = readBatch.records[0];
+  if (!isFenceCommand(lastRecord)) {
+    return false;
+  }
+
+  const fenceBody = lastRecord.body;
+  return (
+    fenceBody !== null &&
+    fenceBody !== undefined &&
+    (fenceBody.startsWith("end-") || fenceBody.startsWith("error-"))
   );
 }
 
