@@ -112,14 +112,12 @@ export async function createResumableStream(
   };
 
   try {
-    const lastRecord = await s2.records.read(
-      {
-        s2Basin: basin,
-        stream: streamId,
-        tailOffset: 1,
-        count: 1,
-      },
-    ) as ReadBatch;
+    const lastRecord = (await s2.records.read({
+      s2Basin: basin,
+      stream: streamId,
+      tailOffset: 1,
+      count: 1,
+    })) as ReadBatch;
 
     debugLog("Last record read:", lastRecord);
     if (lastRecord.records.length > 0 && lastRecord.records[0].headers?.[0][1] === "fence") {
@@ -134,13 +132,7 @@ export async function createResumableStream(
   }
 
   try {
-    await appendFenceCommand(
-      s2,
-      basin,
-      streamId,
-      "",
-      sessionFencingToken
-    );
+    await appendFenceCommand(s2, basin, streamId, "", sessionFencingToken);
   } catch (error: any) {
     if (error.message.includes("fencingTokenMismatch")) {
       debugLog("Stream already exists, resuming existing stream:", streamId, error);
@@ -268,7 +260,7 @@ async function appendRecords(
   s2: S2,
   basin: string,
   streamId: string,
-  appendInput: AppendInput,
+  appendInput: AppendInput
   // isFirstBatch?: boolean
 ): Promise<void> {
   // if (isFirstBatch === true) {
