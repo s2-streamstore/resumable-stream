@@ -15,9 +15,12 @@ function createStreamFromArray(data: string[]): ReadableStream<string> {
 
 
 async function readStreamToArray(
-    stream: ReadableStream<string> | ReadableStream<string | null>,
+    stream: ReadableStream<string> | null,
     timeoutMs: number = 5000
 ): Promise<string[]> {
+    if (!stream) {
+        return [];
+    }
     const reader = stream.getReader();
     const result: string[] = [];
 
@@ -59,7 +62,7 @@ test('pub/sub', async () => {
 
     await new Promise(resolve => setTimeout(resolve, 1000));
 
-    const resumedStream = context.resumeStream(streamId);
+    const resumedStream = await context.resumeStream(streamId);
     const subscriberData = await readStreamToArray(resumedStream);
 
     expect(publisherData).toEqual(originalData);
@@ -93,7 +96,7 @@ test('concurrent creators result in a single stream with consistent ordered data
 
     await new Promise(resolve => setTimeout(resolve, 3000));
 
-    const resumedStream = context.resumeStream(streamId);
+    const resumedStream = await context.resumeStream(streamId);
     const finalStreamData = await readStreamToArray(resumedStream, 20000);
 
     expect(finalStreamData).toEqual(initialMessages);
@@ -115,9 +118,9 @@ test('concurrent readers', async () => {
 
     await new Promise(resolve => setTimeout(resolve, 3000));
 
-    const resumedStream1 = context.resumeStream(streamId);
-    const resumedStream2 = context.resumeStream(streamId);
-    const resumedStream3 = context.resumeStream(streamId);
+    const resumedStream1 = await context.resumeStream(streamId);
+    const resumedStream2 = await context.resumeStream(streamId);
+    const resumedStream3 = await context.resumeStream(streamId);
 
     const results = await Promise.allSettled([
         readStreamToArray(resumedStream1, 20000),

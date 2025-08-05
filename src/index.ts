@@ -121,6 +121,7 @@ export async function createResumableStream(
       },
     ) as ReadBatch;
 
+    debugLog("Last record read:", lastRecord);
     if (lastRecord.records.length > 0 && lastRecord.records[0].headers?.[0][1] === "fence") {
       const lastFence = lastRecord.records[0].body;
       if (lastFence && (lastFence.startsWith("end-") || lastFence.startsWith("error-"))) {
