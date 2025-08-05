@@ -27,7 +27,6 @@ interface S2Config {
 
 interface BatchState {
   batchBuilder: BatchBuilder;
-  isFirstBatch: boolean;
 }
 
 export interface CreateResumableStreamContextOptions {
@@ -58,7 +57,7 @@ export interface ResumableStreamContext {
    * @param streamId - Unique identifier for the stream to resume.
    * @returns A ReadableStream that can be used to read.
    */
-  resumeStream: (streamId: string) => ReadableStream<string | null>;
+  resumeStream: (streamId: string) => Promise<ReadableStream<string> | null>;
 }
 
 function generateFencingToken(): string {
@@ -99,25 +98,57 @@ export async function createResumableStream(
   ctx: CreateResumableStreamContext,
   stream: ReadableStream<string>,
   streamId: string
-): Promise<ReadableStream<string>> {
+): Promise<ReadableStream<string> | null> {
   const { accessToken, basin, batchSize, lingerDuration } = getS2Config();
   const s2 = new S2({ accessToken });
   const [persistentStream, clientStream] = stream.tee();
   const sessionFencingToken = "session-" + generateFencingToken();
 
+  const batchState: BatchState = {
+    batchBuilder: new BatchBuilder({
+      maxBatchRecords: batchSize,
+      fencingToken: sessionFencingToken,
+    }),
+  };
+
+  const lastRecord = await s2.records.read(
+    {
+      s2Basin: basin,
+      stream: streamId,
+      tailOffset: 1,
+      count: 1,
+    },
+  ) as ReadBatch;
+
+  if (lastRecord.records.length > 0 && lastRecord.records[0].headers?.[0][1] === "fence") {
+    const lastFence = lastRecord.records[0].body;
+    if (lastFence && (lastFence.startsWith("end-") || lastFence.startsWith("error-"))) {
+      debugLog("Stream already ended, not resuming:", streamId);
+      return null;
+    }
+  }
+
+  try {
+    await appendFenceCommand(
+      s2,
+      basin,
+      streamId,
+      "",
+      sessionFencingToken
+    );
+  } catch (error: any) {
+    if (error.message.includes("fencingTokenMismatch")) {
+      debugLog("Stream already exists, resuming existing stream:", streamId, error);
+      return await resumeStream(streamId);
+    }
+    debugLog("Error initializing stream:", error);
+    return null;
+  }
+
   const processPersistentStream = async () => {
     const reader = persistentStream.getReader();
-    const batchState: BatchState = {
-      batchBuilder: new BatchBuilder({
-        maxBatchRecords: batchSize,
-        fencingToken: sessionFencingToken,
-      }),
-      isFirstBatch: true,
-    };
 
-    if (batchState.isFirstBatch) {
-      batchState.batchBuilder.setMatchSeqNum(1);
-    }
+    batchState.batchBuilder.setMatchSeqNum(1);
 
     let terminated = false;
     let batchDeadline: Promise<void> | null = null;
@@ -159,8 +190,7 @@ export async function createResumableStream(
         if (batchState.batchBuilder.hasRecords()) {
           const appendInput = batchState.batchBuilder.flush();
           if (appendInput) {
-            await appendRecords(s2, basin, streamId, appendInput, batchState.isFirstBatch);
-            batchState.isFirstBatch = false;
+            await appendRecords(s2, basin, streamId, appendInput);
           }
           batchDeadline = null;
         }
@@ -169,7 +199,7 @@ export async function createResumableStream(
       if (batchState.batchBuilder.hasRecords()) {
         const appendInput = batchState.batchBuilder.flush();
         if (appendInput) {
-          await appendRecords(s2, basin, streamId, appendInput, batchState.isFirstBatch);
+          await appendRecords(s2, basin, streamId, appendInput);
         }
       }
 
@@ -202,7 +232,7 @@ export async function createResumableStream(
   return clientStream;
 }
 
-function resumeStream(streamId: string): ReadableStream<string | null> {
+async function resumeStream(streamId: string): Promise<ReadableStream<string> | null> {
   const { accessToken, basin } = getS2Config();
   const s2 = new S2({ accessToken });
   debugLog("Resuming stream:", streamId);
@@ -234,11 +264,11 @@ async function appendRecords(
   basin: string,
   streamId: string,
   appendInput: AppendInput,
-  isFirstBatch?: boolean
+  // isFirstBatch?: boolean
 ): Promise<void> {
-  if (isFirstBatch === true) {
-    await appendFenceCommand(s2, basin, streamId, "", appendInput.fencingToken || "");
-  }
+  // if (isFirstBatch === true) {
+  //   await appendFenceCommand(s2, basin, streamId, "", appendInput.fencingToken || "");
+  // }
   try {
     await s2.records.append({
       s2Basin: basin,
