@@ -56,7 +56,7 @@ test('pub/sub', async () => {
     const streamId = `test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     const inputStream = createStreamFromArray(originalData);
-    const publisherStream = await context.resumableStream(streamId, inputStream);
+    const publisherStream = await context.resumableStream(streamId, () => inputStream);
 
     const publisherData = await readStreamToArray(publisherStream!);
 
@@ -84,9 +84,9 @@ test('concurrent creators result in a single stream with consistent ordered data
     const inputStream3 = createStreamFromArray([...initialMessages]);
 
     const writers = [
-        context.resumableStream(streamId, inputStream1),
-        context.resumableStream(streamId, inputStream2),
-        context.resumableStream(streamId, inputStream3)
+        context.resumableStream(streamId, () => inputStream1),
+        context.resumableStream(streamId, () => inputStream2),
+        context.resumableStream(streamId, () => inputStream3)
     ];
 
     const results = await Promise.allSettled(writers);
@@ -114,7 +114,7 @@ test('concurrent readers', async () => {
 
     const inputStream = createStreamFromArray(messages);
 
-    await context.resumableStream(streamId, inputStream);
+    await context.resumableStream(streamId, () => inputStream);
 
     await new Promise(resolve => setTimeout(resolve, 3000));
 

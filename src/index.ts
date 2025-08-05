@@ -47,7 +47,7 @@ export interface ResumableStreamContext {
    */
   resumableStream: (
     streamId: string,
-    stream: ReadableStream<string>
+    makeStream: () => ReadableStream<string>
   ) => Promise<ReadableStream<string> | null>;
   /**
    * Resumes a previously created stream by its ID.
@@ -82,8 +82,8 @@ export function createResumableStreamContext(
 
   getS2Config();
   return {
-    resumableStream: async (streamId: string, inputStream: ReadableStream<string>) => {
-      return await createResumableStream(ctx, inputStream, streamId);
+    resumableStream: async (streamId: string, makeStream: () => ReadableStream<string>) => {
+      return await createResumableStream(ctx, makeStream, streamId);
     },
     resumeStream: (streamId: string) => {
       return resumeStream(streamId);
@@ -93,12 +93,12 @@ export function createResumableStreamContext(
 
 export async function createResumableStream(
   ctx: CreateResumableStreamContext,
-  stream: ReadableStream<string>,
+  makeStream: () => ReadableStream<string>,
   streamId: string
 ): Promise<ReadableStream<string> | null> {
   const { accessToken, basin, batchSize, lingerDuration } = getS2Config();
   const s2 = new S2({ accessToken });
-  const [persistentStream, clientStream] = stream.tee();
+  const [persistentStream, clientStream] = makeStream().tee();
   const sessionFencingToken = "session-" + generateFencingToken();
 
   const batchBuilder = new BatchBuilder({
