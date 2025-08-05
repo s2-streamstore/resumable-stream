@@ -127,6 +127,7 @@ export async function createResumableStream(
     }
   }
 
+  // in case of multiple writers, only one with the given fencing token will succeed
   try {
     await appendFenceCommand(s2, basin, streamId, "", sessionFencingToken);
   } catch (error: any) {
@@ -270,6 +271,8 @@ async function appendRecords(
     });
   } catch (error: any) {
     if (error instanceof SeqNum) {
+      // adding a matchSeqNum enforces that the seqNum assigned to the first record matches,
+      // i.e. in the case of retries, it helps de-duplicate records
       debugLog("seqNum mismatch, skipping batch");
       return;
     }
