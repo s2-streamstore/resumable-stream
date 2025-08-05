@@ -139,7 +139,7 @@ export async function createResumableStream(
     return null;
   }
 
-  const processPersistentStream = async () => {
+  const persistStream = async () => {
     const reader = persistentStream.getReader();
 
     batchBuilder.setMatchSeqNum(1);
@@ -222,7 +222,7 @@ export async function createResumableStream(
     }
   };
 
-  ctx.waitUntil(processPersistentStream());
+  ctx.waitUntil(persistStream());
   return clientStream;
 }
 
