@@ -36,28 +36,7 @@ To use this package, you need to create an S2 [access token](https://s2.dev/docs
 
 The incoming stream is batched and the batch size can be changed by setting `S2_BATCH_SIZE`. The maximum time to wait before flushing a batch can be tweaked by setting `S2_LINGER_DURATION` to a duration in milliseconds.
 
-To integrate this package with the Chat SDK, check the following changes or check [this](https://github.com/s2-streamstore/ai-chatbot) fork.
-
-<details>
-<summary>Changes</summary>
-
-`app/(chat)/api/chat/[id]/stream/route.ts`
-
-```diff 
-- const stream = await streamContext.resumableStream(recentStreamId, () => emptyDataStream.pipeThrough(new JsonToSseTransformStream()),);
-
-+ const stream = await streamContext.resumeStream(recentStreamId);
-```
-
-`app/(chat)/api/chat/route.ts`
-
-```diff
-- await streamContext.resumableStream(streamId, () =>
-
-+ await streamContext.resumableStream(streamId,
-```
-
-</details>
+To integrate this package with the Chat SDK, just update your imports to use this package or check [this](https://github.com/s2-streamstore/ai-chatbot) fork.
 
 ```ts
 import { createResumableStreamContext } from "resumable-stream";
