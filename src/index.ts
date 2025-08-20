@@ -55,6 +55,11 @@ export interface ResumableStreamContext {
    * @returns A ReadableStream that can be used to read.
    */
   resumeStream: (streamId: string) => Promise<ReadableStream<string> | null>;
+  /**
+   * Stops a stream by its ID.
+   * @param streamId - Unique identifier for the stream to stop.
+   */
+  stopStream: (streamId: string) => Promise<void>;
 }
 
 function generateFencingToken(): string {
@@ -85,8 +90,11 @@ export function createResumableStreamContext(
     resumableStream: async (streamId: string, makeStream: () => ReadableStream<string>) => {
       return await createResumableStream(ctx, makeStream, streamId);
     },
-    resumeStream: (streamId: string) => {
-      return resumeStream(streamId);
+    resumeStream: async (streamId: string) => {
+      return await resumeStream(streamId);
+    },
+    stopStream: async (streamId: string) => {
+      return await stopStream(streamId);
     },
   };
 }
@@ -253,6 +261,27 @@ async function resumeStream(streamId: string): Promise<ReadableStream<string> | 
   });
 }
 
+// appends a fence command with the previous fencing token as null
+// (overriding the previous fencing token)
+async function stopStream(streamId: string): Promise<void> {
+  const { accessToken, basin } = getS2Config();
+  const s2 = new S2({ accessToken });
+  debugLog("Stopping stream:", streamId);
+
+  try {
+    await appendFenceCommand(
+      s2,
+      basin,
+      streamId,
+      null,
+      "end-" + generateFencingToken()
+    );
+  } catch (error) {
+    debugLog("Error stopping stream:", error);
+    throw error;
+  }
+}
+
 async function appendRecords(
   s2: S2,
   basin: string,
@@ -284,7 +313,7 @@ async function appendFenceCommand(
   s2: S2,
   basin: string,
   streamId: string,
-  prevFencingToken: string,
+  prevFencingToken: string | null,
   newFencingToken: string
 ): Promise<void> {
   await s2.records.append({
