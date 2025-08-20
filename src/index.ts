@@ -269,13 +269,7 @@ async function stopStream(streamId: string): Promise<void> {
   debugLog("Stopping stream:", streamId);
 
   try {
-    await appendFenceCommand(
-      s2,
-      basin,
-      streamId,
-      null,
-      "end-" + generateFencingToken()
-    );
+    await appendFenceCommand(s2, basin, streamId, null, "end-" + generateFencingToken());
   } catch (error) {
     debugLog("Error stopping stream:", error);
     throw error;
