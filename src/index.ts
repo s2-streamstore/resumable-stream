@@ -1,9 +1,7 @@
-import { S2 } from "@s2-dev/streamstore";
-import { ReadAcceptEnum } from "@s2-dev/streamstore/sdk/records.js";
-import { EventStream } from "@s2-dev/streamstore/lib/event-streams.js";
-import { ReadBatch, ReadEvent, SequencedRecord } from "@s2-dev/streamstore/models/components";
-import { AppendInput, BatchBuilder } from "./batching";
-import { FencingToken, SeqNum, TailResponse } from "@s2-dev/streamstore/models/errors";
+import { FencingTokenMismatchError, RangeNotSatisfiableError, S2, AppendRecord as S2AppendRecord, S2Error } from "@s2-dev/streamstore";
+import type { ReadBatch, SequencedRecord } from "@s2-dev/streamstore";
+import { AppendInput, BatchBuilder } from "./batching.js";
+import { SeqNumMismatchError } from "@s2-dev/streamstore";
 
 interface S2Config {
   /**
@@ -21,7 +19,7 @@ interface S2Config {
   readonly batchSize: number;
   /**
    * Maximum time to wait before flushing a batch (in milliseconds).
-   * Defaults to 5000 if not set.
+   * Defaults to 100 if not set.
    */
   readonly lingerDuration: number;
 }
@@ -115,22 +113,20 @@ export async function createResumableStream(
   });
 
   try {
-    const lastRecord = (await s2.records.read({
-      s2Basin: basin,
-      stream: streamId,
-      tailOffset: 1,
+    const lastRecord = await s2.basin(basin).stream(streamId).read({
+      tail_offset: 1,
       count: 1,
-    })) as ReadBatch;
+    });
 
     if (isStreamDone(lastRecord)) {
       debugLog("Stream already ended, not resuming:", streamId);
       return null;
     }
   } catch (error: any) {
-    if (error instanceof TailResponse) {
-      debugLog("Got TailResponse:", error);
+    if (error instanceof RangeNotSatisfiableError) {
+      debugLog("Got RangeNotSatisfiableError:", error);
     } else {
-      debugLog("Error reading last record:", error);
+      debugLog("Error checking stream status:", error);
       return null;
     }
   }
@@ -139,7 +135,7 @@ export async function createResumableStream(
   try {
     await appendFenceCommand(s2, basin, streamId, "", sessionFencingToken);
   } catch (error: any) {
-    if (error instanceof FencingToken) {
+    if (error instanceof FencingTokenMismatchError) {
       debugLog("Stream already exists, resuming existing stream:", streamId, error);
       return await resumeStream(streamId);
     }
@@ -241,18 +237,10 @@ async function resumeStream(streamId: string): Promise<ReadableStream<string> | 
   return new ReadableStream({
     async start(controller) {
       try {
-        const events = await s2.records.read(
-          {
-            s2Basin: basin,
-            stream: streamId,
-            seqNum: 0,
-          },
-          {
-            acceptHeaderOverride: ReadAcceptEnum.textEventStream,
-          }
-        );
-        const eventsStream = events as EventStream<ReadEvent>;
-        await processStream(streamId, eventsStream, controller);
+        const session = await s2.basin(basin).stream(streamId).readSession({
+          seq_num: 0,
+        });
+        await processStream(streamId, session, controller);
       } catch (error) {
         debugLog("Error reading stream:", error);
         return null;
@@ -283,17 +271,18 @@ async function appendRecords(
   appendInput: AppendInput
 ): Promise<void> {
   try {
-    await s2.records.append({
-      s2Basin: basin,
-      stream: streamId,
-      appendInput: {
-        records: appendInput.records.records,
-        fencingToken: appendInput.fencingToken,
-        matchSeqNum: appendInput.matchSeqNum,
-      },
-    });
+    await s2.basin(basin).stream(streamId).append(
+      appendInput.records.records.map(r => ({
+        body: r.body,
+        headers: r.headers,
+      })),
+      {
+        fencing_token: appendInput.fencingToken,
+        match_seq_num: appendInput.matchSeqNum,
+      }
+    );
   } catch (error: any) {
-    if (error instanceof SeqNum) {
+    if (error instanceof SeqNumMismatchError) {
       // adding a matchSeqNum enforces that the seqNum assigned to the first record matches,
       // i.e. in the case of retries, it helps de-duplicate records
       debugLog("seqNum mismatch, skipping batch");
@@ -310,49 +299,40 @@ async function appendFenceCommand(
   prevFencingToken: string | null,
   newFencingToken: string
 ): Promise<void> {
-  await s2.records.append({
-    s2Basin: basin,
-    stream: streamId,
-    appendInput: {
-      fencingToken: prevFencingToken,
-      records: [
-        {
-          body: newFencingToken,
-          headers: [["", "fence"]],
-        },
-      ],
-    },
-  });
+  await s2.basin(basin).stream(streamId).append(
+    [{
+      body: newFencingToken,
+      headers: [["", "fence"]],
+    }],
+    {
+      fencing_token: prevFencingToken,
+    }
+  );
 }
 
 async function processStream(
   streamID: string,
-  eventStream: EventStream<ReadEvent>,
+  session: AsyncIterable<SequencedRecord>,
   controller: ReadableStreamDefaultController<string>
 ): Promise<void> {
-  for await (const readEvent of eventStream) {
-    if (readEvent.event !== "batch") continue;
-
-    const batch = readEvent.data as ReadBatch;
-    for (const rec of batch.records) {
-      if (isFenceCommand(rec)) {
-        if (rec.body?.startsWith("end")) {
-          debugLog("Closing stream due to fence(end) command:", streamID);
-          controller.close();
+  for await (const rec of session) {
+    if (isFenceCommand(rec)) {
+      if (rec.body?.startsWith("end")) {
+        debugLog("Closing stream due to fence(end) command:", streamID);
+        controller.close();
+        return;
+      }
+      continue;
+    }
+    if (rec.body) {
+      try {
+        controller.enqueue(rec.body);
+      } catch (error: any) {
+        if (error.code === "ERR_INVALID_STATE") {
+          debugLog("Likely page refresh caused stream closure:", streamID);
           return;
         }
-        continue;
-      }
-      if (rec.body) {
-        try {
-          controller.enqueue(rec.body);
-        } catch (error: any) {
-          if (error.code === "ERR_INVALID_STATE") {
-            debugLog("Likely page refresh caused stream closure:", streamID);
-            return;
-          }
-          throw error;
-        }
+        throw error;
       }
     }
   }
@@ -367,7 +347,7 @@ function isFenceCommand(record: SequencedRecord): boolean {
 }
 
 function isStreamDone(readBatch: ReadBatch): boolean {
-  if (readBatch.records.length === 0) {
+  if (!readBatch.records || readBatch.records.length === 0) {
     return false;
   }
 

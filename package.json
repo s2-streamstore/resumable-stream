@@ -36,10 +36,10 @@
     "tsx": "^4.20.3",
     "typedoc": "^0.28.3",
     "typedoc-plugin-markdown": "^4.6.2",
-    "typescript": "^5.8.3"
+    "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@s2-dev/streamstore": "^0.15.8",
+    "@s2-dev/streamstore": "^0.16.9",
     "rimraf": "^6.0.1"
   }
 }
