@@ -1,4 +1,11 @@
-import { AppendRecord, FencingTokenMismatchError, RangeNotSatisfiableError, S2, AppendRecord as S2AppendRecord, S2Error } from "@s2-dev/streamstore";
+import {
+  AppendRecord,
+  FencingTokenMismatchError,
+  RangeNotSatisfiableError,
+  S2,
+  AppendRecord as S2AppendRecord,
+  S2Error,
+} from "@s2-dev/streamstore";
 import type { ReadBatch, SequencedRecord } from "@s2-dev/streamstore";
 import { SeqNumMismatchError } from "@s2-dev/streamstore";
 
@@ -150,7 +157,7 @@ export async function createResumableStream(
     });
 
     try {
-      let terminated = false;      
+      let terminated = false;
 
       while (!terminated) {
         const { done, value } = await reader.read();
@@ -166,10 +173,10 @@ export async function createResumableStream(
             return;
           }
           throw error;
-        });        
+        });
       }
-      
-      batcher.flush();      
+
+      batcher.flush();
       await batcher[Symbol.asyncDispose]();
 
       await appendFenceCommand(
@@ -244,12 +251,12 @@ async function appendFenceCommand(
   prevFencingToken: string | null,
   newFencingToken: string
 ): Promise<void> {
-  await s2.basin(basin).stream(streamId).append(    
-    AppendRecord.make(newFencingToken, [["", "fence"]]),
-    {
+  await s2
+    .basin(basin)
+    .stream(streamId)
+    .append(AppendRecord.make(newFencingToken, [["", "fence"]]), {
       fencing_token: prevFencingToken,
-    }
-  );
+    });
 }
 
 async function processStream(
