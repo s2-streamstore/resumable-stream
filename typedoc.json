@@ -1,16 +1,12 @@
 {
   "$schema": "https://typedoc.org/schema.json",
-  "entryPoints": ["src/index.ts"],
-  "name": "Resumable Stream",
-  "excludePrivate": true,
-  "excludeProtected": true,
-  "excludeExternals": true,
-  "includeVersion": true,
-  "tsconfig": "tsconfig.json",
-  "disableSources": true,
+  "entryPoints": ["./src/index.ts"],
   "out": "docs",
-  "entryPointStrategy": "expand",
-  "readme": "none",
-  "plugin": ["typedoc-plugin-markdown"],
-  "defaultCategory": "Functions"
+  "plugin": [],
+  "excludePrivate": true,
+  "excludeProtected": false,
+  "excludeInternal": true,
+  "readme": "README.md",
+  "gitRevision": "main",
+  "includeVersion": true
 }
