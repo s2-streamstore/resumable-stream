@@ -1,6 +1,5 @@
-import { FencingTokenMismatchError, RangeNotSatisfiableError, S2, AppendRecord as S2AppendRecord, S2Error } from "@s2-dev/streamstore";
+import { AppendRecord, FencingTokenMismatchError, RangeNotSatisfiableError, S2, AppendRecord as S2AppendRecord, S2Error } from "@s2-dev/streamstore";
 import type { ReadBatch, SequencedRecord } from "@s2-dev/streamstore";
-import { AppendInput, BatchBuilder } from "./batching.js";
 import { SeqNumMismatchError } from "@s2-dev/streamstore";
 
 interface S2Config {
@@ -107,11 +106,6 @@ export async function createResumableStream(
   const [persistentStream, clientStream] = makeStream().tee();
   const sessionFencingToken = "session-" + generateFencingToken();
 
-  const batchBuilder = new BatchBuilder({
-    maxBatchRecords: batchSize,
-    fencingToken: sessionFencingToken,
-  });
-
   try {
     const lastRecord = await s2.basin(basin).stream(streamId).read({
       tail_offset: 1,
@@ -146,60 +140,37 @@ export async function createResumableStream(
   const persistStream = async () => {
     const reader = persistentStream.getReader();
 
-    batchBuilder.setMatchSeqNum(1);
-
-    let terminated = false;
-    let batchDeadline: Promise<void> | null = null;
+    const stream = s2.basin(basin).stream(streamId);
+    const session = await stream.appendSession();
+    const batcher = session.makeBatcher({
+      lingerDuration,
+      maxBatchSize: batchSize,
+      fencing_token: sessionFencingToken,
+      match_seq_num: 1, // First data record after fence command at seq_num 0
+    });
 
     try {
+      let terminated = false;      
+
       while (!terminated) {
-        while (!batchBuilder.isFull()) {
-          if (batchBuilder.hasRecords() && batchDeadline === null) {
-            batchDeadline = new Promise((resolve) => setTimeout(resolve, lingerDuration));
-          }
+        const { done, value } = await reader.read();
 
-          const readPromise = reader.read();
-          const promises: Promise<any>[] = [readPromise];
-
-          if (batchDeadline && batchBuilder.hasRecords()) {
-            promises.push(batchDeadline);
-          }
-
-          const result = await Promise.race(promises);
-
-          if (result === undefined && batchBuilder.hasRecords()) {
-            batchDeadline = null;
-            break;
-          }
-
-          if (result && typeof result === "object" && "done" in result) {
-            const { done, value } = result;
-            if (done) {
-              terminated = true;
-              break;
-            }
-
-            if (!batchBuilder.addRecord(value)) {
-              break;
-            }
-          }
+        if (done) {
+          terminated = true;
+          break;
         }
 
-        if (batchBuilder.hasRecords()) {
-          const appendInput = batchBuilder.flush();
-          if (appendInput) {
-            await appendRecords(s2, basin, streamId, appendInput);
+        batcher.submit(AppendRecord.make(value)).catch((error: any) => {
+          if (error instanceof SeqNumMismatchError) {
+            debugLog("seqNum mismatch, skipping record");
+            return;
           }
-          batchDeadline = null;
-        }
+          throw error;
+        });        
       }
-
-      if (batchBuilder.hasRecords()) {
-        const appendInput = batchBuilder.flush();
-        if (appendInput) {
-          await appendRecords(s2, basin, streamId, appendInput);
-        }
-      }
+      
+      batcher.flush();      
+      await batcher[Symbol.asyncDispose]();
 
       await appendFenceCommand(
         s2,
@@ -211,6 +182,7 @@ export async function createResumableStream(
     } catch (error) {
       debugLog("Error processing stream:", error);
       try {
+        await batcher[Symbol.asyncDispose]();
         await appendFenceCommand(
           s2,
           basin,
@@ -222,6 +194,7 @@ export async function createResumableStream(
         debugLog("Error appending fence command:", fenceError);
       }
     } finally {
+      await session[Symbol.asyncDispose]();
       reader.releaseLock();
     }
   };
@@ -264,34 +237,6 @@ async function stopStream(streamId: string): Promise<void> {
   }
 }
 
-async function appendRecords(
-  s2: S2,
-  basin: string,
-  streamId: string,
-  appendInput: AppendInput
-): Promise<void> {
-  try {
-    await s2.basin(basin).stream(streamId).append(
-      appendInput.records.records.map(r => ({
-        body: r.body,
-        headers: r.headers,
-      })),
-      {
-        fencing_token: appendInput.fencingToken,
-        match_seq_num: appendInput.matchSeqNum,
-      }
-    );
-  } catch (error: any) {
-    if (error instanceof SeqNumMismatchError) {
-      // adding a matchSeqNum enforces that the seqNum assigned to the first record matches,
-      // i.e. in the case of retries, it helps de-duplicate records
-      debugLog("seqNum mismatch, skipping batch");
-      return;
-    }
-    throw error;
-  }
-}
-
 async function appendFenceCommand(
   s2: S2,
   basin: string,
@@ -299,11 +244,8 @@ async function appendFenceCommand(
   prevFencingToken: string | null,
   newFencingToken: string
 ): Promise<void> {
-  await s2.basin(basin).stream(streamId).append(
-    [{
-      body: newFencingToken,
-      headers: [["", "fence"]],
-    }],
+  await s2.basin(basin).stream(streamId).append(    
+    AppendRecord.make(newFencingToken, [["", "fence"]]),
     {
       fencing_token: prevFencingToken,
     }
