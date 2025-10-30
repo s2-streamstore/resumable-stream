@@ -178,6 +178,7 @@ export async function createResumableStream(
 
       batcher.flush();
       await batcher[Symbol.asyncDispose]();
+      await session[Symbol.asyncDispose]();
 
       await appendFenceCommand(
         s2,
@@ -190,6 +191,7 @@ export async function createResumableStream(
       debugLog("Error processing stream:", error);
       try {
         await batcher[Symbol.asyncDispose]();
+        await session[Symbol.asyncDispose]();
         await appendFenceCommand(
           s2,
           basin,
@@ -201,7 +203,6 @@ export async function createResumableStream(
         debugLog("Error appending fence command:", fenceError);
       }
     } finally {
-      await session[Symbol.asyncDispose]();
       reader.releaseLock();
     }
   };

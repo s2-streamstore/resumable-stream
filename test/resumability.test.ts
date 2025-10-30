@@ -59,8 +59,6 @@ test('pub/sub', async () => {
 
     const publisherData = await readStreamToArray(publisherStream!);
 
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
     const resumedStream = await context.resumeStream(streamId);
     const subscriberData = await readStreamToArray(resumedStream);
 
@@ -95,8 +93,6 @@ test('concurrent creators result in a single stream with consistent ordered data
     const successful = results.filter(result => result.status === 'fulfilled' && result.value !== null);
     expect(successful.length).toEqual(3);
 
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
     const resumedStream = await context.resumeStream(streamId);
     const finalStreamData = await readStreamToArray(resumedStream, 20000);
 
@@ -115,7 +111,7 @@ test('concurrent readers', async () => {
 
     const inputStream = createStreamFromArray(messages);
 
-    await context.resumableStream(streamId, () => inputStream);
+    context.resumableStream(streamId, () => inputStream);
     
     const resumedStream1 = await context.resumeStream(streamId);
     const resumedStream2 = await context.resumeStream(streamId);
