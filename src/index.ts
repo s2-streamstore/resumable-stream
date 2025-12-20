@@ -28,6 +28,11 @@ interface S2Config {
    * Defaults to 100 if not set.
    */
   readonly lingerDuration: number;
+  /**
+   * Maximum time to wait for a read from S2 before timing out (in milliseconds).
+   * If 0 or not set, reading will wait indefinitely.
+   */
+  readonly readTimeout: number;
 }
 
 export interface CreateResumableStreamContextOptions {
@@ -75,11 +80,12 @@ function getS2Config(): S2Config {
   const basin = process.env.S2_BASIN;
   const batchSize = parseInt(process.env.S2_BATCH_SIZE ?? "10", 10);
   const lingerDuration = parseInt(process.env.S2_LINGER_DURATION ?? "5000", 10);
+  const readTimeout = parseInt(process.env.S2_READ_TIMEOUT ?? "0", 10);
 
   if (!accessToken) throw new Error("S2_ACCESS_TOKEN is not set");
   if (!basin) throw new Error("S2_BASIN is not set");
 
-  return { accessToken, basin, batchSize, lingerDuration };
+  return { accessToken, basin, batchSize, lingerDuration, readTimeout };
 }
 
 export function createResumableStreamContext(
@@ -212,7 +218,7 @@ export async function createResumableStream(
 }
 
 async function resumeStream(streamId: string): Promise<ReadableStream<string> | null> {
-  const { accessToken, basin } = getS2Config();
+  const { accessToken, basin, readTimeout } = getS2Config();
   const s2 = new S2({ accessToken });
   debugLog("Resuming stream:", streamId);
   return new ReadableStream({
@@ -221,7 +227,7 @@ async function resumeStream(streamId: string): Promise<ReadableStream<string> | 
         const session = await s2.basin(basin).stream(streamId).readSession({
           seq_num: 0,
         });
-        await processStream(streamId, session, controller);
+        await processStream(streamId, session, controller, readTimeout);
       } catch (error) {
         debugLog("Error reading stream:", error);
         return null;
@@ -263,9 +269,38 @@ async function appendFenceCommand(
 async function processStream(
   streamID: string,
   session: AsyncIterable<SequencedRecord>,
-  controller: ReadableStreamDefaultController<string>
+  controller: ReadableStreamDefaultController<string>,
+  readTimeoutMs: number
 ): Promise<void> {
-  for await (const rec of session) {
+  const iterator = session[Symbol.asyncIterator]();
+  const makeTimeoutPromise = (ms: number) =>
+    new Promise<{ timeout: true }>((resolve) => {
+      if (ms > 0) setTimeout(() => resolve({ timeout: true }), ms);
+    });
+
+  while (true) {
+    const nextPromise = iterator.next();
+    const result = await (readTimeoutMs > 0
+      ? Promise.race<[IteratorResult<SequencedRecord>, { timeout: true }]>([
+          nextPromise as any,
+          makeTimeoutPromise(readTimeoutMs) as any,
+        ])
+      : (nextPromise as any));
+
+    // Handle timeout case
+    if (readTimeoutMs > 0 && result && (result as any).timeout) {
+      debugLog("Closing stream due to read timeout:", streamID);
+      controller.close();
+      return;
+    }
+
+    const { value: rec, done } = result as IteratorResult<SequencedRecord>;
+    if (done) {
+      debugLog("Closing stream due to completion:", streamID);
+      controller.close();
+      return;
+    }
+
     if (isFenceCommand(rec)) {
       if (rec.body?.startsWith("end")) {
         debugLog("Closing stream due to fence(end) command:", streamID);
@@ -286,8 +321,6 @@ async function processStream(
       }
     }
   }
-  debugLog("Closing stream due to completion:", streamID);
-  controller.close();
 }
 
 function isFenceCommand(record: SequencedRecord): boolean {

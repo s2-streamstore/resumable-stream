@@ -36,6 +36,8 @@ To use this package, you need to create an S2 [access token](https://s2.dev/docs
 
 The incoming stream is batched and the batch size can be changed by setting `S2_BATCH_SIZE`. The maximum time to wait before flushing a batch can be tweaked by setting `S2_LINGER_DURATION` to a duration in milliseconds.
 
+When resuming a stream, you can optionally set `S2_READ_TIMEOUT` (in milliseconds) to close the reader if no records are received within the configured duration. If unset or set to `0`, the reader will wait indefinitely.
+
 To integrate this package with the Chat SDK, just update your imports to use this package or check [this](https://github.com/s2-streamstore/ai-chatbot) fork.
 
 ```ts

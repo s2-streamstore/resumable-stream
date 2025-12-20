@@ -133,3 +133,29 @@ test('concurrent readers', async () => {
     expect(readerData[1]).toEqual(messages);
     expect(readerData[2]).toEqual(messages);
 });
+
+test('read timeout closes when no records are available', async () => {
+    const previousTimeout = process.env.S2_READ_TIMEOUT;
+    process.env.S2_READ_TIMEOUT = '1000';
+
+    const context = createResumableStreamContext({
+        waitUntil: async (promise) => {
+            await promise;
+        }
+    });
+
+    const streamId = `timeout-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    // No writer appends to this stream. Resuming should time out and close.
+    const resumedStream = await context.resumeStream(streamId);
+    const data = await readStreamToArray(resumedStream, 5000);
+
+    expect(data).toEqual([]);
+
+    // restore env
+    if (previousTimeout === undefined) {
+        delete process.env.S2_READ_TIMEOUT;
+    } else {
+        process.env.S2_READ_TIMEOUT = previousTimeout;
+    }
+});
