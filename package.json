@@ -21,7 +21,7 @@
     "url": "git+https://github.com/s2-streamstore/resumable-stream.git"
   },
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "bugs": {
     "url": "https://github.com/s2-streamstore/resumable-stream/issues"
   },
